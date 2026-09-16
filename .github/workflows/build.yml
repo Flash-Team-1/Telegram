@@ -26,10 +26,10 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Install required NDK
+    - name: Accept licenses and install NDK/CMake
       run: |
-        echo "y" | sdkmanager "ndk;27.2.12479018"
-        echo "y" | sdkmanager "cmake;3.22.1"
+        yes | sdkmanager --licenses || true
+        sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -39,12 +39,8 @@ jobs:
         mkdir -p TMessagesProj/config
         rm -f TMessagesProj/config/release.keystore
         keytool -genkey -v -keystore TMessagesProj/config/release.keystore \
-          -alias androidkey \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -storepass android \
-          -keypass android \
+          -alias androidkey -keyalg RSA -keysize 2048 -validity 10000 \
+          -storepass android -keypass android \
           -dname "CN=Telegram Android, OU=Development, O=Telegram, L=San Francisco, ST=CA, C=US" \
           -noprompt
 
@@ -54,52 +50,41 @@ jobs:
         sed -i 's/RELEASE_KEY_PASSWORD=.*/RELEASE_KEY_PASSWORD=android/' gradle.properties
         sed -i 's/RELEASE_KEY_ALIAS=.*/RELEASE_KEY_ALIAS=androidkey/' gradle.properties
 
-    - name: Update BuildVars with your API credentials
+    - name: Update BuildVars with API credentials
       run: |
-        sed -i 's/public static int APP_ID = .*/public static int APP_ID = 26333172;/' TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-        sed -i 's/public static String APP_HASH = .*/public static String APP_HASH = "2a031a551da8ca175b0225eac8a2a131";/' TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-        
-        # تصحيح اسم التطبيق في BuildVars
-        sed -i 's/public static String APPLICATION_NAME = .*/public static String APPLICATION_NAME = "Telegram";/' TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+        FILE=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+        sed -i 's/public static int APP_ID = .*/public static int APP_ID = 26333172;/' $FILE
+        sed -i 's/public static String APP_HASH = .*/public static String APP_HASH = "2a031a551da8ca175b0225eac8a2a131";/' $FILE
 
-    - name: Build with Gradle and capture errors
+    - name: Build with Gradle
       env:
         RELEASE_STORE_PASSWORD: android
         RELEASE_KEY_PASSWORD: android
         RELEASE_KEY_ALIAS: androidkey
       run: |
-        echo "=== Starting Build ==="
-        # تشغيل البناء مع تفاصيل كاملة وحفظ السجل
-        ./gradlew :TMessagesProj_AppStandalone:assembleRelease --stacktrace --info --no-daemon 2>&1 | tee build.log
-        # إذا فشل البناء، استخرج الخطأ
-        if [ $? -ne 0 ]; then
-          echo "=== BUILD FAILED ==="
-          echo "=== Extracting error message ==="
-          grep -A 20 "What went wrong" build.log || true
-          grep -A 10 "FAILURE" build.log || true
-          grep -B 5 -A 10 "Exception" build.log | head -50 || true
-          exit 1
-        fi
+        touch build.log
+        ./gradlew :TMessagesProj_AppStandalone:assembleRelease \
+          --stacktrace --no-daemon 2>&1 | tee build.log
+
+    - name: Extract error if build failed
+      if: failure()
+      run: |
+        echo "=== BUILD FAILED ==="
+        grep -A 20 "What went wrong" build.log || true
+        grep -A 10 "FAILURE" build.log || true
 
     - name: Find APK files
       if: success()
-      run: |
-        echo "Searching for APK files..."
-        find . -name "*.apk" -type f
-        echo "=== APK locations with size ==="
-        find . -name "*.apk" -type f -exec ls -lh {} \;
+      run: find . -name "*.apk" -type f -exec ls -lh {} \;
 
     - name: Upload APK
       if: success()
       uses: actions/upload-artifact@v4
       with:
         name: telegram-apk
-        path: |
-          TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
-          TMessagesProj/build/outputs/apk/**/*.apk
-          **/build/outputs/apk/**/*.apk
+        path: '**/build/outputs/apk/**/*.apk'
 
-    - name: Upload build logs (always)
+    - name: Upload build logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
